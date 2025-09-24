@@ -107,7 +107,7 @@ echo "- MX: @ -> mail.$DOMAIN (priority 10)"
 echo "- SPF: TXT v=spf1 mx a ip4:3.147.37.21 ~all"
 
 # Clone and validate src
-[ ! -d ./src ] && git clone https://github.com/fin3ss3g0d/evilgophish.git src
+[ ! -d ./src ] && git clone https://github.com/c04ch1337/evilgophish.git src
 cd src
 git pull
 for dir in evilginx gophish evilfeed; do
