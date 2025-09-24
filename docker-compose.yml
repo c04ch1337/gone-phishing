@@ -8,7 +8,7 @@
 # - DNS: Lightsail zone for amazon-u.online; SPF/DKIM/DMARC for deliverability.
 # - Security: Restrict ports; use secrets for credentials.
 # - Deliverability: Warm IP; monitor maillogs.
-# - Troubleshooting: Check src/evilginx3; verify mailconfig/opendkim.
+# - Troubleshooting: Check src/evilginx3, src/gophish; verify mailconfig/opendkim.
 
 version: '3.8'
 
@@ -54,7 +54,7 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
       - TWILIO_PHONE=${TWILIO_PHONE}
-    command: ./gophish --admin ./config.json
+    command: ./gophish
     depends_on:
       - evilfeed
       - mailserver
