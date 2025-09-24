@@ -105,7 +105,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.evilfeed
-    condition: service_started  # Only build/run if src/evilfeed/main.go exists
+    depends_on:
+      - gophish  # Ensure gophish starts first
+    entrypoint: >
+      sh -c "
+        [ -f src/evilfeed/main.go ] && ./evilfeed || echo 'src/evilfeed/main.go not found, skipping evilfeed'
+      "
     ports:
       - "127.0.0.1:1337:1337"
     volumes:
