@@ -1,39 +1,32 @@
 #!/bin/bash
 # setup.sh - Setup for evilgophish with SMTP on Lightsail (3.147.37.21).
-# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go and evilfeed.go; makes evilfeed optional; fixes mailconfig; cleans /tmp/evilgophish; adds Docker auth checks.
+# Changes: Domain amazon-u.online; Turnstile optional; separate repos for evilginx3, gophish, evilfeed; .env.example; validates gophish.go and evilfeed.go; makes evilfeed optional; fixes mailconfig; cleans /tmp/evilgophish; attempts anonymous pulls with rate limit handling.
 # SMTP: Configures support@amazon-u.online for GoPhish/Evilginx.
-# Fixes: Checks src/gophish/gophish.go and src/evilfeed/evilfeed.go; retries DKIM with debug; skips evilfeed if directory missing; clarifies RID_REPLACEMENT; removes existing /tmp/evilgophish; ensures Docker Hub/GHCR auth.
+# Fixes: Checks src/gophish/gophish.go and src/evilfeed/evilfeed.go; retries DKIM with debug; skips evilfeed if directory missing; clarifies RID_REPLACEMENT; removes existing /tmp/evilgophish; avoids Docker login if possible.
 # Usage: ./setup.sh
 # Best Practices:
 # - Edit .env.example before running; backup configs; secure secrets.
 # - DNS: Lightsail zone; delegate from GoDaddy.
 # - Mail: Generate DKIM; test with swaks; monitor deliverability.
 # - Lightsail: Open ports; request port 25 removal.
-# - Docker: Log in to Docker Hub and GHCR before running.
+# - Docker: Anonymous pulls may hit rate limits; log in to Docker Hub/GHCR if needed.
 
 set -e
 
-# Check Docker authentication
-echo "Checking Docker Hub authentication..."
-if ! docker info --format '{{.LoggedIn}}' | grep -q "true"; then
-  echo "Docker Hub not authenticated. Please log in."
-  echo "Run: docker login (use Docker Hub username/password or token)"
-  echo "Create a free account at https://hub.docker.com if needed."
-  exit 1
+# Attempt anonymous pulls for base images
+echo "Attempting to pull base images anonymously..."
+if ! docker pull nginx:alpine 2>/dev/null; then
+  echo "Warning: Failed to pull nginx:alpine (possible Docker Hub rate limit)."
+  echo "To fix, log in to Docker Hub (optional, increases pull limit):"
+  echo "  docker login (create free account at https://hub.docker.com)"
+  echo "Or wait 6 hours for rate limit reset, or check cached images: docker images nginx:alpine"
 fi
-
-echo "Checking GitHub Container Registry (GHCR) authentication..."
 if ! docker pull ghcr.io/docker-mailserver/docker-mailserver:latest 2>/dev/null; then
-  echo "GHCR authentication failed. Please log in."
-  echo "Run: docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GITHUB_PAT"
-  echo "Generate a PAT with 'read:packages' scope at https://github.com/settings/tokens"
-  exit 1
+  echo "Warning: Failed to pull ghcr.io/docker-mailserver/docker-mailserver:latest."
+  echo "GHCR may require authentication. To fix, create a GitHub PAT with 'read:packages' scope at https://github.com/settings/tokens"
+  echo "Then: docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GITHUB_PAT"
+  echo "Or check cached images: docker images ghcr.io/docker-mailserver/docker-mailserver:latest"
 fi
-
-# Pre-pull base images
-echo "Pulling base images..."
-docker pull nginx:alpine
-docker pull ghcr.io/docker-mailserver/docker-mailserver:latest
 
 # Create .env.example if not exists
 if [ ! -f .env.example ]; then
